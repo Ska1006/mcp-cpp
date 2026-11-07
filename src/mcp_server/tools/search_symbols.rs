@@ -112,7 +112,7 @@ pub struct FileProcessingResult {
                    • Graceful handling of large codebases with intelligent result capping
 
                    🏗️ BUILD SYSTEM INTEGRATION:
-                   • Multi-provider support (CMake, Meson, extensible architecture)
+                   • Multi-provider support (CMake, Meson, standalone compile_commands.json)
                    • Automatic compilation database discovery and validation
                    • Custom build directory specification for multi-component projects
                    • Project vs external symbol classification using compilation database analysis

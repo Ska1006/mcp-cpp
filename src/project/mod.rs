@@ -6,6 +6,7 @@
 
 pub mod cmake_provider;
 pub mod compilation_database;
+pub mod compilation_database_provider;
 pub mod component;
 pub mod component_session;
 pub mod error;
@@ -19,6 +20,7 @@ pub mod workspace_session;
 pub use cmake_provider::CmakeProvider;
 
 pub use compilation_database::CompilationDatabase;
+pub use compilation_database_provider::CompilationDatabaseProvider;
 
 pub use component::ProjectComponent;
 

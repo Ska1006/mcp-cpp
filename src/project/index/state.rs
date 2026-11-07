@@ -114,14 +114,15 @@ impl IndexState {
             comp_db.entries.len()
         );
 
-        // Add all compilation database entries
-        for entry in &comp_db.entries {
-            let absolute_path = entry.file.canonicalize()?;
+        let source_files = comp_db
+            .canonical_source_files()
+            .map_err(std::io::Error::other)?;
+        state.compilation_db_file_count = source_files.len();
+        for resolved_path in source_files {
+            let absolute_path = resolved_path.canonicalize()?;
             let metadata = FileMetadata::from_compilation_db(absolute_path.clone());
             state.files.insert(absolute_path, metadata);
         }
-
-        state.compilation_db_file_count = comp_db.entries.len();
 
         debug!(
             "Index state created with {} compilation database files",
@@ -389,6 +390,51 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn test_compilation_database_uses_entry_working_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source_directory = temp.path().join("source directory");
+        std::fs::create_dir_all(&source_directory).unwrap();
+        let source = source_directory.join("main.cpp");
+        std::fs::write(&source, "").unwrap();
+        let entry = Entry {
+            directory: source_directory,
+            file: PathBuf::from("main.cpp"),
+            arguments: vec!["c++".to_string(), "-c".to_string(), "main.cpp".to_string()],
+            output: None,
+        };
+        let compilation_db = CompilationDatabase {
+            path: temp.path().join("database/compile_commands.json"),
+            entries: vec![entry.clone(), entry],
+        };
+
+        let state = IndexState::from_compilation_db(&compilation_db).unwrap();
+
+        assert_eq!(state.total_files(), 1);
+        assert_eq!(state.compilation_db_files(), 1);
+        assert!(state.files.contains_key(&source.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn test_compilation_database_rejects_missing_source() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let compilation_db = CompilationDatabase {
+            path: temp.path().join("compile_commands.json"),
+            entries: vec![Entry {
+                directory: temp.path().to_path_buf(),
+                file: PathBuf::from("missing.cpp"),
+                arguments: vec!["c++".to_string(), "-c".to_string()],
+                output: None,
+            }],
+        };
+
+        let error = IndexState::from_compilation_db(&compilation_db)
+            .err()
+            .expect("a missing source must fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

@@ -95,7 +95,11 @@ impl WorkspaceSession {
                     build_dir.display()
                 );
 
-                match self.scanner.discover_component(&build_dir)? {
+                let source_root = self.workspace.lock().await.project_root_path.clone();
+                match self
+                    .scanner
+                    .discover_component_with_source_root(&build_dir, Some(&source_root))?
+                {
                     Some(discovered_component) => {
                         // Add the discovered component to the workspace
                         let mut workspace = self.workspace.lock().await;
@@ -247,6 +251,63 @@ mod tests {
 
         // Verify it's the same session (Arc comparison)
         assert!(Arc::ptr_eq(&session, &second_session));
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_dynamic_standalone_database_discovery_with_clangd() {
+        use crate::mcp_server::tools::lsp_helpers::document_symbols::get_document_symbols;
+        use crate::symbol::uri_from_pathbuf;
+        use std::fs;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_root = temp_dir.path().join("project");
+        let build_dir = temp_dir.path().join("external-build/.qtc_clangd");
+        fs::create_dir_all(source_root.join("src")).unwrap();
+        fs::create_dir_all(&build_dir).unwrap();
+        let source_file = source_root.join("src/main.cpp");
+        fs::write(
+            &source_file,
+            "#ifdef STANDALONE_DATABASE\nclass StandaloneDatabaseSymbol {};\n#endif\n",
+        )
+        .unwrap();
+        fs::write(
+            build_dir.join("compile_commands.json"),
+            serde_json::to_vec(&serde_json::json!([{
+                "directory": source_root,
+                "file": "src/main.cpp",
+                "arguments": ["c++", "-DSTANDALONE_DATABASE", "-c", "src/main.cpp"]
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        let workspace = ProjectWorkspace::new(source_root.clone(), vec![], 0);
+        let workspace_session =
+            WorkspaceSession::new(workspace, crate::test_utils::get_test_clangd_path()).unwrap();
+        let session = workspace_session
+            .get_component_session(build_dir.clone())
+            .await
+            .unwrap();
+        session
+            .ensure_indexed(crate::test_utils::DEFAULT_INDEXING_TIMEOUT)
+            .await
+            .unwrap();
+        let symbols = get_document_symbols(&session, uri_from_pathbuf(&source_file))
+            .await
+            .unwrap();
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.name == "StandaloneDatabaseSymbol")
+        );
+        let workspace = workspace_session.get_workspace().lock().await;
+        assert_eq!(workspace.component_count(), 1);
+        let component = workspace.get_component_by_build_dir(&build_dir).unwrap();
+        assert_eq!(component.provider_type, "compilation_database");
+        assert_eq!(
+            component.source_root_path,
+            source_root.canonicalize().unwrap()
+        );
     }
 
     #[cfg(feature = "clangd-integration-tests")]

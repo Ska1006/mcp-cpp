@@ -14,6 +14,16 @@ pub trait ProjectComponentProvider: Send + Sync {
     /// - Ok(None) if this provider cannot handle the directory (not applicable)
     /// - Err(error) if this provider should handle the directory but parsing fails
     fn scan_path(&self, path: &Path) -> Result<Option<ProjectComponent>, ProjectError>;
+
+    /// Scan with a known workspace source root when build metadata cannot supply one.
+    /// Build-system providers retain their own source-root detection by default.
+    fn scan_path_with_source_root(
+        &self,
+        path: &Path,
+        _source_root: Option<&Path>,
+    ) -> Result<Option<ProjectComponent>, ProjectError> {
+        self.scan_path(path)
+    }
 }
 
 /// Registry for managing multiple project component providers
@@ -45,7 +55,24 @@ impl ProjectProviderRegistry {
     /// If a provider can handle the directory but fails, returns the error.
     pub fn scan_directory(&self, path: &Path) -> Result<Option<ProjectComponent>, ProjectError> {
         for provider in &self.providers {
-            match provider.scan_path(path)? {
+            if let Some(component) = provider.scan_path(path)? {
+                return Ok(Some(component));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Scan with optional workspace context, preserving provider registration order.
+    pub fn scan_directory_with_source_root(
+        &self,
+        path: &Path,
+        source_root: Option<&Path>,
+    ) -> Result<Option<ProjectComponent>, ProjectError> {
+        if source_root.is_none() {
+            return self.scan_directory(path);
+        }
+        for provider in &self.providers {
+            match provider.scan_path_with_source_root(path, source_root)? {
                 Some(component) => return Ok(Some(component)),
                 None => continue,
             }

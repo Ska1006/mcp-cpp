@@ -13,23 +13,33 @@ Modern C++ development relies heavily on advanced tooling to navigate complex co
 
 This MCP server bridges that gap by providing AI agents with semantic analysis capabilities similar to what developers experience in modern IDEs. Unlike generic LSP MCP implementations, this server focuses specifically on C++ workflows.
 
-The server can handle multiple C++ projects simultaneously, which is particularly useful for complex scenarios like embedded Linux development where understanding interactions between individual components is crucial. It supports both CMake and Meson build systems with automatic build directory detection and switching.
+The server can handle multiple C++ projects simultaneously, which is particularly useful for complex scenarios like embedded Linux development where understanding interactions between individual components is crucial. It supports CMake, Meson, and standalone compilation databases from other build systems and IDEs, with automatic build directory detection and switching.
 
 Advanced indexing monitoring tracks both clangd's index state and logs to ensure complete symbol coverage, while intelligent filtering distinguishes between project code and external dependencies.
 
 ## Features
 
-The server provides three core analysis tools for C++ development. The `get_project_details` tool performs dynamic CMake and Meson build environment discovery and enables configuration switching. For symbol exploration, `search_symbols` offers C++ symbol search with project boundary detection and intelligent filtering. When deeper analysis is needed, `analyze_symbol_context` provides symbol analysis with inheritance and call hierarchy support.
+The server provides three core analysis tools for C++ development. The `get_project_details` tool performs dynamic CMake, Meson, and standalone compilation database discovery and enables configuration switching. For symbol exploration, `search_symbols` offers C++ symbol search with project boundary detection and intelligent filtering. When deeper analysis is needed, `analyze_symbol_context` provides symbol analysis with inheritance and call hierarchy support.
 
-The implementation works with both CMake and Meson projects, handling projects with multiple libraries and executables simultaneously. Advanced indexing monitors clangd's index state and logs to ensure complete symbol coverage, while intelligent filtering distinguishes between project code and external dependencies. The server automatically discovers and switches between build configurations, and includes a Python CLI tool for quick symbol exploration.
+The implementation works with CMake, Meson, and any project providing a compilation database, handling projects with multiple libraries and executables simultaneously. Advanced indexing monitors clangd's index state and logs to ensure complete symbol coverage, while intelligent filtering distinguishes between project code and external dependencies. The server automatically discovers and switches between build configurations, and includes a Python CLI tool for quick symbol exploration.
 
 ## Component Discovery
 
-The MCP server automatically looks for components in the current working directory, scanning 2 levels below by default. This scan depth can be changed using tool options. When an AI agent requests analysis using a build directory outside the project, the MCP server will use that hint path and create a component from it, allowing flexible project analysis beyond the default scanning scope.
+The MCP server automatically looks for components in the current working directory with a default scan depth of 3. This scan depth can be changed using tool options. When an AI agent requests analysis using a build directory outside the project, the MCP server will use that hint path and create a component from it, allowing flexible project analysis beyond the default scanning scope.
+
+Directories containing a valid, nonempty `compile_commands.json` are also accepted without CMake or Meson metadata. This supports databases exported by Qt Creator/qmake, Bear, compiledb, or custom build tooling. CMake and Meson providers take precedence so their build metadata is preserved; standalone components use provider type `compilation_database` and report unknown generator/build type.
+
+For example, select a Qt Creator database explicitly in an analysis tool request:
+
+```json
+{"query": "MyClass", "build_directory": "/path/to/project/.qtc_clangd"}
+```
+
+The database must already exist; the server does not run qmake or generate it. Automatic discovery also includes `.qtc_clangd` directories within the scan depth, while other hidden directory trees are skipped by default. A directory selected explicitly is accepted even if hidden or outside the workspace. Standalone source roots use the explicitly selected workspace root; without workspace context, they are inferred from the common directory of the source files. Use the source workspace for `--root` (or `get_project_details`'s `path`), and pass the database directory as `build_directory`; this keeps sibling headers within the project boundary even when the database is stored elsewhere.
 
 ## Dependencies
 
-The server requires clangd 11 or later for C++ semantic analysis (clangd 20+ recommended), and Rust 2024 edition for building. Your project must use CMake or Meson to generate compilation databases (`compile_commands.json`).
+The server requires clangd 11 or later for C++ semantic analysis (clangd 20+ recommended), and Rust 2024 edition for building. Your project must provide a valid, nonempty JSON compilation database (`compile_commands.json`), generated by CMake, Meson, an IDE, or another build tool.
 
 You can optionally set the `CLANGD_PATH` environment variable to specify a custom clangd binary location.
 
@@ -325,11 +335,11 @@ The server also assists with development workflows by enabling switching between
 
 **Options**:
 - `path` (optional): Project root path to scan. If different from server default, triggers fresh scan
-- `depth` (optional): Scan depth for component discovery (0-10 levels, default: 2). Controls how many directory levels below the current working directory to search for CMake/Meson components
+- `depth` (optional): Scan depth for component discovery (0-10, default: 3). Controls traversal below the selected workspace root when searching for CMake, Meson, or standalone compilation database components
 
-**Output**: Complete project analysis including build configurations, components, compilation database status, and multi-provider discovery (CMake, Meson, etc.)
+**Output**: Complete project analysis including build configurations, components, compilation database status, and multi-provider discovery (CMake, Meson, standalone compilation databases)
 
-**Component Discovery**: By default, scans 2 levels below the current working directory for components. When AI agents specify build directories outside this scope, the server creates components from those hint paths automatically.
+**Component Discovery**: By default, searches the current working directory using a scan depth of 3. When AI agents specify build directories outside this scope, the server creates components from those hint paths automatically.
 
 #### `search_symbols`
 
@@ -384,5 +394,5 @@ analyze_symbol_context {"symbol": "MyClass::process", "max_examples": 3}
 
 ## Limitations
 
-- Requires CMake or Meson projects that generate `compile_commands.json`
+- Requires a valid, nonempty `compile_commands.json` from any build system or IDE
 - First-time indexing can take time on large projects (configurable timeout, default 20s)

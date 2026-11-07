@@ -49,7 +49,7 @@ use crate::project::ProjectWorkspace;
                    🎯 PROJECT STRUCTURE DETAILS:
                    Each discovered component includes:
                    • Build directory path (ABSOLUTE) and source root location
-                   • Provider type (cmake, meson, etc.) for build system identification
+                   • Provider type (cmake, meson, compilation_database) for build system identification
                    • Generator and build type information in standardized format
                    • Complete build options and configuration details
                    • Compilation database status for LSP integration

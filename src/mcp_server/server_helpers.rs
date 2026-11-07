@@ -108,7 +108,7 @@ pub fn resolve_build_directory(
                     Err(CallToolError::new(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         format!(
-                            "No build directories found in project. Scan root: '{}'. Run get_project_details first to see project status and available build configurations. If no build directories exist, you may need to run cmake or meson to generate build configuration.",
+                            "No build directories found in project. Scan root: '{}'. Run get_project_details first to see project status and available build configurations. Generate a nonempty compile_commands.json with your build system or specify the directory containing an existing compilation database.",
                             workspace.project_root_path.display()
                         ),
                     )))

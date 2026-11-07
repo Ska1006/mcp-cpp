@@ -6,7 +6,7 @@ use crate::project::{ProjectComponent, ProjectError, ProjectProviderRegistry, Pr
 /// Options for configuring project scanning behavior
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
-    /// Skip hidden directories (starting with '.')
+    /// Skip hidden directories, except Qt Creator compilation databases (.qtc_clangd).
     pub skip_hidden: bool,
 
     /// Follow symbolic links during traversal
@@ -40,13 +40,14 @@ impl ProjectScanner {
         Self { provider_registry }
     }
 
-    /// Create a scanner with default providers (CMake and Meson)
+    /// Create a scanner with CMake, Meson, and standalone compilation database providers.
     pub fn with_default_providers() -> Self {
-        use crate::project::{CmakeProvider, MesonProvider};
+        use crate::project::{CmakeProvider, CompilationDatabaseProvider, MesonProvider};
 
         let registry = ProjectProviderRegistry::new()
             .with_provider(Box::new(CmakeProvider::new()))
-            .with_provider(Box::new(MesonProvider::new()));
+            .with_provider(Box::new(MesonProvider::new()))
+            .with_provider(Box::new(CompilationDatabaseProvider::new()));
 
         Self::new(registry)
     }
@@ -68,6 +69,27 @@ impl ProjectScanner {
         &self,
         build_dir: &Path,
     ) -> Result<Option<ProjectComponent>, ProjectError> {
+        self.discover_component_impl(build_dir, None)
+    }
+
+    /// Discover an explicitly selected build directory with optional workspace context.
+    /// Explicit paths are accepted even when they are hidden or outside the workspace.
+    pub fn discover_component_with_source_root(
+        &self,
+        build_dir: &Path,
+        source_root: Option<&Path>,
+    ) -> Result<Option<ProjectComponent>, ProjectError> {
+        match source_root {
+            Some(_) => self.discover_component_impl(build_dir, source_root),
+            None => self.discover_component(build_dir),
+        }
+    }
+
+    fn discover_component_impl(
+        &self,
+        build_dir: &Path,
+        source_root: Option<&Path>,
+    ) -> Result<Option<ProjectComponent>, ProjectError> {
         // Validate that the path exists and is a directory
         if !build_dir.exists() {
             return Err(ProjectError::PathNotFound {
@@ -82,7 +104,10 @@ impl ProjectScanner {
         }
 
         // Try to discover a project component in this directory using the provider registry
-        match self.provider_registry.scan_directory(build_dir) {
+        match self
+            .provider_registry
+            .scan_directory_with_source_root(build_dir, source_root)
+        {
             Ok(Some(component)) => Ok(Some(component)),
             Ok(None) => Ok(None), // No component found - not a build directory
             Err(e) => {
@@ -132,8 +157,17 @@ impl ProjectScanner {
             walk_builder = walk_builder.follow_links(true);
         }
 
+        // Prune hidden subtrees, retaining the explicitly selected root and Qt Creator's DB.
+        let entries = walk_builder.into_iter().filter_entry(|entry| {
+            !options.skip_hidden
+                || entry.depth() == 0
+                || (!entry.file_type().is_dir() && !entry.file_type().is_symlink())
+                || !entry.file_name().to_string_lossy().starts_with('.')
+                || entry.file_name() == ".qtc_clangd"
+        });
+
         // Traverse directory tree
-        for entry in walk_builder.into_iter() {
+        for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(e) => {
@@ -150,21 +184,16 @@ impl ProjectScanner {
                 continue;
             }
 
-            // Skip hidden directories if configured
-            if options.skip_hidden
-                && let Some(file_name) = path.file_name()
-                && file_name.to_string_lossy().starts_with('.')
-            {
-                continue;
-            }
-
             // Skip if we've already scanned this path (can happen with symlinks)
             if !scanned_paths.insert(path.to_path_buf()) {
                 continue;
             }
 
             // Try to discover a project component in this directory
-            match self.provider_registry.scan_directory(path) {
+            match self
+                .provider_registry
+                .scan_directory_with_source_root(path, Some(root_path))
+            {
                 Ok(Some(component)) => {
                     components.push(component);
 
