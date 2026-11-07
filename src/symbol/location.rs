@@ -219,13 +219,7 @@ impl FileLocation {
 
     /// Get the LSP URI for this file location
     pub fn get_uri(&self) -> lsp_types::Uri {
-        let path_str = self.file_path.to_string_lossy();
-        let uri_str = if path_str.starts_with('/') {
-            format!("file://{}", path_str)
-        } else {
-            format!("file:///{}", path_str)
-        };
-        uri_str.parse().expect("Failed to parse URI from file path")
+        uri_from_pathbuf(&self.file_path)
     }
 
     /// Convert FileLocation to compact LSP-style range format
@@ -311,19 +305,24 @@ impl From<LspLocation> for FilePosition {
     fn from(location: LspLocation) -> Self {
         FilePosition {
             position: location.range.start.into(),
-            file_path: location.uri.path().to_string().into(),
+            file_path: pathbuf_from_uri(&location.uri),
         }
     }
 }
 
 pub fn uri_from_pathbuf(path: &Path) -> lsp_types::Uri {
-    use std::str::FromStr;
-    let uri_string = format!("file://{}", path.to_string_lossy());
-    lsp_types::Uri::from_str(&uri_string).expect("Failed to convert PathBuf to Uri")
+    let absolute_path = std::path::absolute(path).expect("Failed to resolve absolute file path");
+    let url = url::Url::from_file_path(absolute_path).expect("Failed to convert file path to URL");
+    url.as_str()
+        .parse()
+        .expect("Failed to convert file URL to URI")
 }
 
 pub fn pathbuf_from_uri(uri: &lsp_types::Uri) -> PathBuf {
-    uri.path().to_string().into()
+    url::Url::parse(uri.as_str())
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .unwrap_or_else(|| uri.path().to_string().into())
 }
 
 impl From<FilePosition> for LspLocation {
@@ -414,6 +413,62 @@ impl FileLineWithContents {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_file_uri_roundtrip_with_special_characters() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source files/файл #100%?.cpp");
+
+        let uri = uri_from_pathbuf(&path);
+
+        assert!(uri.as_str().contains("source%20files/"));
+        assert!(uri.as_str().contains("%23"));
+        assert!(uri.as_str().contains("%25"));
+        assert!(uri.as_str().contains("%3F"));
+        assert!(uri.as_str().contains("%D1%84"));
+        assert_eq!(pathbuf_from_uri(&uri), path);
+    }
+
+    #[test]
+    fn test_file_uri_decodes_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_uri = uri_from_pathbuf(temp.path());
+        let uri = format!("{}/source%20files/literal%2520%23.cpp", root_uri.as_str())
+            .parse()
+            .unwrap();
+
+        assert_eq!(
+            pathbuf_from_uri(&uri),
+            temp.path().join("source files/literal%20#.cpp")
+        );
+    }
+
+    #[test]
+    fn test_relative_file_uri_uses_current_directory() {
+        let path = Path::new("source files/main.cpp");
+        let uri = uri_from_pathbuf(path);
+
+        assert_eq!(
+            pathbuf_from_uri(&uri),
+            std::env::current_dir().unwrap().join(path)
+        );
+    }
+
+    #[test]
+    fn test_location_conversions_decode_file_uri() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("source files/main#%.cpp");
+        let position = FilePosition {
+            file_path: file_path.clone(),
+            position: Position { line: 2, column: 3 },
+        };
+        let lsp_location = LspLocation::from(position.clone());
+
+        assert_eq!(FilePosition::from(lsp_location.clone()), position);
+        let location = FileLocation::from(&lsp_location);
+        assert_eq!(location.file_path, file_path);
+        assert_eq!(location.get_uri(), lsp_location.uri);
+    }
 
     #[test]
     fn test_compact_range_point_location() {

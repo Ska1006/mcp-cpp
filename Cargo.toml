@@ -30,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 walkdir = "2.5"
 uuid = { version = "1.17", features = ["v4", "serde"] }
+url = "2.5"
 regex = "1.11"
 sha2 = "0.10"
 json_compilation_db = "1.0"

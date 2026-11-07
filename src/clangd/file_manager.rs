@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use crate::lsp::traits::LspClientTrait;
+use crate::symbol::uri_from_pathbuf;
 
 // ============================================================================
 // File Manager Errors
@@ -93,10 +94,8 @@ impl ClangdFileManager {
         let content_hash = Self::compute_hash(&content);
 
         // Generate file URI
-        let uri_string = format!("file://{}", abs_path.display());
-        let uri: lsp_types::Uri = uri_string
-            .parse()
-            .map_err(|e| FileManagerError::InvalidPath(format!("Invalid URI: {}", e)))?;
+        let uri = uri_from_pathbuf(&abs_path);
+        let uri_string = uri.as_str().to_string();
 
         // Check if file is already open
         if let Some(entry) = self.opened_files.get(&abs_path) {
@@ -295,6 +294,41 @@ mod tests {
             ClangdFileManager::get_language_id(&PathBuf::from("test.txt")),
             "cpp"
         );
+    }
+
+    #[tokio::test]
+    async fn test_open_file_with_special_characters() {
+        use crate::lsp::traits::MockLspClientTrait;
+
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("source file#100%.cpp");
+        fs::write(&file_path, "int main() { return 0; }").unwrap();
+        let expected_path = file_path.canonicalize().unwrap();
+        let mut client = MockLspClientTrait::new();
+        client.expect_is_initialized().return_const(true);
+        client
+            .expect_open_text_document()
+            .withf(move |uri, language, version, text| {
+                uri.as_str().ends_with("/source%20file%23100%25.cpp")
+                    && crate::symbol::pathbuf_from_uri(uri)
+                        .canonicalize()
+                        .ok()
+                        .as_ref()
+                        == Some(&expected_path)
+                    && language == "cpp"
+                    && *version == 1
+                    && text == "int main() { return 0; }"
+            })
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+        let mut manager = ClangdFileManager::new();
+
+        manager
+            .ensure_file_ready(&file_path, &mut client)
+            .await
+            .unwrap();
+
+        assert!(manager.is_file_open(&file_path));
     }
 
     #[test]

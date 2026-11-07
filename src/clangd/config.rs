@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::clangd::error::ClangdConfigError;
+use crate::symbol::uri_from_pathbuf;
 
 // ============================================================================
 // Configuration Constants
@@ -585,10 +586,11 @@ impl ClangdConfig {
     pub fn get_root_uri(&self) -> Option<String> {
         self.lsp_config.root_uri.clone().or_else(|| {
             // Auto-generate from working directory if not specified
-            Some(format!(
-                "file://{}",
-                self.working_directory.to_string_lossy()
-            ))
+            Some(
+                uri_from_pathbuf(&self.working_directory)
+                    .as_str()
+                    .to_string(),
+            )
         })
     }
 
@@ -700,6 +702,31 @@ mod tests {
     }
 
     #[test]
+    fn test_root_uri_encodes_working_directory() {
+        let temp_dir = tempdir().unwrap();
+        let source_dir = temp_dir.path().join("source files#100%");
+        let build_dir = source_dir.join("build files");
+        std::fs::create_dir_all(&build_dir).unwrap();
+        std::fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
+        let config = ClangdConfigBuilder::new()
+            .working_directory(&source_dir)
+            .build_directory(&build_dir)
+            .build()
+            .unwrap();
+
+        let root_uri = config.get_root_uri().unwrap();
+
+        assert!(root_uri.ends_with("/source%20files%23100%25"));
+        let uri = root_uri.parse().unwrap();
+        assert_eq!(
+            crate::symbol::pathbuf_from_uri(&uri)
+                .canonicalize()
+                .unwrap(),
+            source_dir.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
     fn test_root_uri_auto_generation() {
         let temp_dir = tempdir().unwrap();
         let build_dir = temp_dir.path().join("build");
@@ -714,6 +741,12 @@ mod tests {
 
         let root_uri = config.get_root_uri().unwrap();
         assert!(root_uri.starts_with("file://"));
-        assert!(root_uri.contains(&temp_dir.path().to_string_lossy().to_string()));
+        let uri = root_uri.parse().unwrap();
+        assert_eq!(
+            crate::symbol::pathbuf_from_uri(&uri)
+                .canonicalize()
+                .unwrap(),
+            config.working_directory
+        );
     }
 }

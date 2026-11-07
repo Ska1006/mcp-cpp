@@ -14,7 +14,7 @@ use tracing::{trace, warn};
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 use crate::project::component_session::ComponentSession;
-use crate::symbol::uri_from_pathbuf;
+use crate::symbol::{pathbuf_from_uri, uri_from_pathbuf};
 
 // Fuzzy matching threshold - accept all positive scores
 const FUZZY_MATCH_THRESHOLD: isize = 0;
@@ -575,12 +575,9 @@ pub async fn get_document_symbols(
     trace!("Requesting document symbols for URI: {:?}", file_uri);
 
     // Ensure file is ready
-    let uri_str = file_uri.to_string();
-    let file_path_str = uri_str.strip_prefix("file://").unwrap_or(&uri_str);
+    let file_path = pathbuf_from_uri(&file_uri);
 
-    component_session
-        .ensure_file_ready(Path::new(file_path_str))
-        .await?;
+    component_session.ensure_file_ready(&file_path).await?;
 
     let mut session = component_session.lsp_session().await;
     let client = session.client_mut();

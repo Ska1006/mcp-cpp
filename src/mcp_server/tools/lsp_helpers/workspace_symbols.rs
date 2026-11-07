@@ -46,6 +46,7 @@ use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 use crate::project::ProjectComponent;
 use crate::project::component_session::ComponentSession;
+use crate::symbol::pathbuf_from_uri;
 
 // ============================================================================
 // Traits for Workspace Symbol Filtering
@@ -77,10 +78,8 @@ impl ProjectBoundaryFilter {
     }
 
     /// Check if a file path belongs to the project
-    fn is_project_file(&self, path: &str) -> bool {
-        let file_path = std::path::PathBuf::from(path);
-
-        if let Ok(canonical_file) = file_path.canonicalize() {
+    fn is_project_file(&self, path: &std::path::Path) -> bool {
+        if let Ok(canonical_file) = path.canonicalize() {
             canonical_file.starts_with(&self.canonical_source_root)
         } else {
             false
@@ -94,13 +93,13 @@ impl WorkspaceSymbolFilter for ProjectBoundaryFilter {
             return true;
         }
 
-        let uri_str = match &symbol.location {
-            lsp_types::OneOf::Left(location) => location.uri.as_str(),
-            lsp_types::OneOf::Right(workspace_location) => workspace_location.uri.as_str(),
+        let uri = match &symbol.location {
+            lsp_types::OneOf::Left(location) => &location.uri,
+            lsp_types::OneOf::Right(workspace_location) => &workspace_location.uri,
         };
 
-        if let Some(path) = uri_str.strip_prefix("file://") {
-            self.is_project_file(path)
+        if uri.as_str().starts_with("file://") {
+            self.is_project_file(&pathbuf_from_uri(uri))
         } else {
             true // Default to inclusion when URI parsing fails
         }
@@ -589,6 +588,25 @@ mod tests {
         assert_eq!(builder.max_results, Some(10));
         assert!(builder.include_external);
         assert!(!builder.case_sensitive);
+    }
+
+    #[test]
+    fn test_project_boundary_filter_decodes_file_uri() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_root = temp.path().join("source files#100%");
+        std::fs::create_dir(&source_root).unwrap();
+        let file_path = source_root.join("main file.cpp");
+        std::fs::write(&file_path, "").unwrap();
+        let mut component = create_test_component();
+        component.source_root_path = source_root;
+        let filter = ProjectBoundaryFilter::new(&component, false);
+        let uri = crate::symbol::uri_from_pathbuf(&file_path);
+        let mut symbol =
+            create_test_workspace_symbol("Test", SymbolKind::CLASS, uri.as_str(), None);
+
+        assert!(filter.matches(&symbol));
+        symbol.location = OneOf::Right(lsp_types::WorkspaceLocation { uri });
+        assert!(filter.matches(&symbol));
     }
 
     #[test]
